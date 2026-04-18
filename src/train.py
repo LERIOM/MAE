@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import PIL.Image as Image
-import tqdm
+from tqdm import tqdm
 from torchvision import transforms
 
 def apply_mask(images, mask_ratio, seed=None):
@@ -48,10 +48,11 @@ def train_one_epoch(model, train_loader, optimizer, criterion, device):
     progress_bar = tqdm(train_loader, desc="Training", unit="batch")
 
     for idx, images in enumerate(progress_bar):
-        masked_images = apply_mask(images, mask_ratio=0.75).to(device)
+        masked_images, visible_indices = apply_mask(images, mask_ratio=0.75)
+        masked_images = masked_images.to(device)
         images = images.to(device)
 
-        outputs = model(masked_images)
+        outputs = model((masked_images, visible_indices))
         loss = criterion(outputs, images)
         optimizer.zero_grad()
         loss.backward()
@@ -71,10 +72,11 @@ def validate_one_epoch(model, val_loader, criterion, device):
 
     with torch.no_grad():
         for idx, images in enumerate(progress_bar):
-            masked_images = apply_mask(images, mask_ratio=0.75).to(device)
+            masked_images, visible_indices = apply_mask(images, mask_ratio=0.75)
+            masked_images = masked_images.to(device)
             images = images.to(device)
 
-            outputs = model(masked_images)
+            outputs = model((masked_images, visible_indices))
             loss = criterion(outputs, images)
             total_loss += loss.item()
             progress_bar.set_postfix({"Loss": total_loss / (idx + 1)})

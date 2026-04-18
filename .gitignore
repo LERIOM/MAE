@@ -84,3 +84,6 @@ Thumbs.db
 # Optional: local sqlite db, logs
 *.log
 *.sqlite3
+
+checkpoints/*
+!.gitkeep
