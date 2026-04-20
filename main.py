@@ -1,54 +1,47 @@
-import torch
-import os
 from src.data import create_dataloaders
-from src.model import AutoEncoder
+from src.model import build_mae
 from src.train import train
+import torch
+import matplotlib.pyplot as plt
+
+
+
+
 
 def main():
-    # Config
-    IMG_SIZE = 256
-    BATCH_SIZE = 32
-    NUM_EPOCHS = 50
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    CP_PATH = "checkpoints/autoencoder.pth"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+    print(f"Using device: {device}")
 
-    print(f"Device: {DEVICE}")
+    train_loader, val_loader = create_dataloaders()
 
-    # Dataset
-    train_loader, val_loader = create_dataloaders(
-        batch_size = BATCH_SIZE,
-        image_size = IMG_SIZE,
-        val_split = 0.2,
-        pin_memory = DEVICE.type == "cuda",
-    )
+    model = build_mae()
 
-    print(f"Train: {len(train_loader.dataset)} images | Val: {len(val_loader.dataset)} images")
-
-    # Model
-    model = AutoEncoder(img_size=IMG_SIZE)
-    model.to(DEVICE)
-
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Training parameters : {total_params:,}")
-
-    # Training
+    num_epochs = 200
     train_losses, val_losses = train(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        device=DEVICE,
-        num_epochs=NUM_EPOCHS,
+        model,
+        train_loader,
+        val_loader,
+        device,
+        num_epochs=num_epochs,
+        save_visualizations=True,
+        visualization_dir="outputs/visualisations",
+        num_visualization_images=5,
+        visualization_seed=42,
     )
 
-    # Save
-    os.makedirs("checkpoints", exist_ok=True)
-    torch.save({
-        "model_state_dict" : model.state_dict(),
-        "train_losses" : train_losses,
-        "val_losses" : val_losses,
-    }, CP_PATH)
-    print(f"Model saved at {CP_PATH}")
-
+    plt.figure(figsize=(10, 5))
+    plt.plot(range(1, num_epochs + 1), train_losses, label="Train Loss")
+    plt.plot(range(1, num_epochs + 1), val_losses, label="Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training and Validation Loss")
+    plt.legend()
+    plt.grid()
+    plt.savefig("outputs/loss_curve.png")
+    plt.show()
+    plt.close()
 
 if __name__ == "__main__":
     main()
