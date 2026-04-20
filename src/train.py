@@ -2,7 +2,7 @@ from contextlib import nullcontext
 
 import torch
 import PIL.Image as Image
-import tqdm
+from tqdm import tqdm
 from torchvision import transforms
 
 from src.visualisation import get_visualization_batch, save_epoch_visualization
