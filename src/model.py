@@ -143,6 +143,14 @@ class MAEEncoder(nn.Module):
         """
         B, N, D = x.shape
         n_keep = int(N * (1 - self.mask_ratio))
+        if n_keep <= 0:
+            raise ValueError(
+                f"mask_ratio={self.mask_ratio} keeps no visible patches for N={N}"
+            )
+        if n_keep == N:
+            ids = torch.arange(N, device=x.device).unsqueeze(0).expand(B, -1)
+            mask = torch.zeros(B, N, device=x.device)
+            return x, mask, ids, ids
 
         noise = torch.rand(B, N, device=x.device)
 

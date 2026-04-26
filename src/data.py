@@ -270,6 +270,54 @@ class TextileDataset(Dataset):
         return image
 
 
+class ClassificationImageDataset(Dataset):
+    def __init__(self, image_paths, labels, transform=None):
+        self.image_paths = list(image_paths)
+        self.labels = list(labels)
+        self.transform = transform
+
+        if not self.image_paths:
+            raise ValueError("Dataset requires at least one image")
+        if len(self.image_paths) != len(self.labels):
+            raise ValueError("image_paths and labels must have the same length")
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, index):
+        image_path = self.image_paths[index]
+
+        with Image.open(image_path) as image:
+            image = image.convert("RGB")
+
+        if self.transform is not None:
+            image = self.transform(image)
+
+        return image, self.labels[index]
+
+
+def list_classification_samples(root_dir, class_names):
+    root_dir = Path(root_dir)
+    image_paths = []
+    labels = []
+
+    for label, class_name in enumerate(class_names):
+        class_dir = root_dir / str(class_name)
+        if class_dir.is_dir():
+            class_image_paths = list_image_files(class_dir)
+            image_paths.extend(class_image_paths)
+            labels.extend([label] * len(class_image_paths))
+
+    if not image_paths:
+        raise ValueError(
+            f"No image files found for classes {list(class_names)} in: {root_dir}"
+        )
+
+    samples = sorted(zip(image_paths, labels), key=lambda sample: str(sample[0]))
+    image_paths, labels = zip(*samples)
+    return list(image_paths), list(labels)
+
+
 def split_image_paths(image_paths, val_split=0.2, seed=42):
     if not 0.0 < val_split < 1.0:
         raise ValueError(f"val_split must be in (0, 1), got {val_split}")
@@ -292,6 +340,33 @@ def split_image_paths(image_paths, val_split=0.2, seed=42):
     val_paths = [image_paths[idx] for idx in val_indices]
 
     return train_paths, val_paths
+
+
+def split_classification_samples(image_paths, labels, val_split=0.2, seed=42):
+    if not 0.0 < val_split < 1.0:
+        raise ValueError(f"val_split must be in (0, 1), got {val_split}")
+    if len(image_paths) != len(labels):
+        raise ValueError("image_paths and labels must have the same length")
+
+    num_images = len(image_paths)
+    num_val = int(num_images * val_split)
+
+    if num_val == 0 or num_val == num_images:
+        raise ValueError(
+            f"val_split={val_split} produces an empty split for {num_images} images"
+        )
+
+    generator = torch.Generator().manual_seed(seed)
+    indices = torch.randperm(num_images, generator=generator).tolist()
+    val_indices = indices[:num_val]
+    train_indices = indices[num_val:]
+
+    train_paths = [image_paths[idx] for idx in train_indices]
+    train_labels = [labels[idx] for idx in train_indices]
+    val_paths = [image_paths[idx] for idx in val_indices]
+    val_labels = [labels[idx] for idx in val_indices]
+
+    return train_paths, train_labels, val_paths, val_labels
 
 
 def create_datasets(
@@ -332,6 +407,116 @@ def create_datasets(
     val_dataset = TextileDataset(val_paths, transform=val_transform)
 
     return train_dataset, val_dataset
+
+
+def create_classification_datasets(
+    root_dir=None,
+    image_size=224,
+    val_split=0.2,
+    seed=42,
+    train_transform=None,
+    val_transform=None,
+    dataset_name="flowers",
+    max_classes=None,
+):
+    dataset_name = normalize_dataset_name(dataset_name)
+
+    if train_transform is None:
+        train_transform = default_transform(image_size=image_size)
+    if val_transform is None:
+        val_transform = default_transform(image_size=image_size)
+
+    if dataset_name == "flowers":
+        if root_dir is None:
+            root_dir = resolve_default_root_dir(dataset_name)
+        root_dir = Path(root_dir)
+        train_dir = root_dir / "train"
+        val_dir = resolve_split_dir(root_dir, FLOWERS_VAL_DIR_NAMES)
+        if not train_dir.is_dir():
+            raise FileNotFoundError(f"Flowers train split not found: {train_dir}")
+        if val_dir is None:
+            candidates = ", ".join(FLOWERS_VAL_DIR_NAMES)
+            raise FileNotFoundError(
+                f"Flowers validation split not found in {root_dir}. "
+                f"Expected one of: {candidates}"
+            )
+        class_names = resolve_flowers_class_names(root_dir, max_classes=max_classes)
+        train_paths, train_labels = list_classification_samples(train_dir, class_names)
+        val_paths, val_labels = list_classification_samples(val_dir, class_names)
+    else:
+        if root_dir is None:
+            root_dir = resolve_default_root_dir(dataset_name)
+        root_dir = Path(root_dir)
+        class_names = [class_dir.name for class_dir in list_class_dirs(root_dir)]
+        class_names = select_class_names(class_names, max_classes=max_classes)
+        image_paths, labels = list_classification_samples(root_dir, class_names)
+        train_paths, train_labels, val_paths, val_labels = split_classification_samples(
+            image_paths,
+            labels,
+            val_split=val_split,
+            seed=seed,
+        )
+
+    train_dataset = ClassificationImageDataset(
+        train_paths,
+        train_labels,
+        transform=train_transform,
+    )
+    val_dataset = ClassificationImageDataset(
+        val_paths,
+        val_labels,
+        transform=val_transform,
+    )
+    return train_dataset, val_dataset, class_names
+
+
+def create_classification_dataloaders(
+    root_dir=None,
+    batch_size=32,
+    image_size=224,
+    val_split=0.2,
+    seed=42,
+    num_workers=0,
+    pin_memory=None,
+    train_transform=None,
+    val_transform=None,
+    dataset_name="flowers",
+    max_classes=None,
+):
+    train_dataset, val_dataset, class_names = create_classification_datasets(
+        root_dir=root_dir,
+        dataset_name=dataset_name,
+        image_size=image_size,
+        val_split=val_split,
+        seed=seed,
+        train_transform=train_transform,
+        val_transform=val_transform,
+        max_classes=max_classes,
+    )
+
+    if pin_memory is None:
+        pin_memory = torch.cuda.is_available()
+
+    persistent_workers = num_workers > 0
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+    )
+
+    return train_loader, val_loader, class_names
 
 
 def create_dataloaders(
