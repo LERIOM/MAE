@@ -5,16 +5,13 @@ import torch
 import matplotlib.pyplot as plt
 
 
-
-
-
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
     print(f"Using device: {device}")
 
-    train_loader, val_loader = create_dataloaders()
+    train_loader, val_loader = create_dataloaders(dataset_name="textile")
 
     model = build_mae()
 

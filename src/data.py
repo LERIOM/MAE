@@ -2,14 +2,20 @@ from pathlib import Path
 
 import torch
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
+from torch.utils.data import DataLoader, Dataset, random_split
+from torchvision import datasets, transforms
+
+try:
+    import kagglehub
+except ImportError:  # pragma: no cover - optional dependency
+    kagglehub = None
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RAW_DIR = PROJECT_ROOT / "data" / "raw"
 DEFAULT_FLOWERS_DIR = DEFAULT_RAW_DIR / "flowers"
+DEFAULT_ANIMALS10_DIR = DEFAULT_RAW_DIR / "animals10" / "raw-img"
 DEFAULT_TEXTILE_DIRS = (
     DEFAULT_RAW_DIR / "japanese_textiles",
     DEFAULT_RAW_DIR / "sri_lankan_textiles",
@@ -21,6 +27,17 @@ def default_transform(image_size=256):
     return transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
+    ])
+
+
+def default_resnet_transform(image_size=224):
+    return transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=(0.485, 0.456, 0.406),
+            std=(0.229, 0.224, 0.225),
+        ),
     ])
 
 
@@ -44,6 +61,8 @@ def list_image_files(root_dir=DEFAULT_RAW_DIR):
 def normalize_dataset_name(dataset_name):
     normalized_name = str(dataset_name).strip().lower()
     aliases = {
+        "animals10": "animals10",
+        "animals": "animals10",
         "textile": "textile",
         "textiles": "textile",
         "flower": "flowers",
@@ -60,6 +79,38 @@ def normalize_dataset_name(dataset_name):
 
 
 def resolve_default_root_dir(dataset_name):
+    if dataset_name == "animals10":
+        if DEFAULT_ANIMALS10_DIR.exists():
+            return DEFAULT_ANIMALS10_DIR
+
+        if kagglehub is None:
+            raise ImportError(
+                "kagglehub is required to auto-download Animals-10. "
+                "Install it with `pip install kagglehub` or pass root_dir explicitly."
+            )
+
+        try:
+            downloaded_root = Path(kagglehub.dataset_download("alessiocorrado99/animals10"))
+        except Exception:  # pragma: no cover - network/auth dependent
+            raise RuntimeError(
+                "Failed to download Animals-10 from Kaggle. "
+                "Make sure Kaggle access is configured, or pass root_dir explicitly."
+            ) from None
+        candidate_dirs = (
+            downloaded_root / "raw-img",
+            downloaded_root / "animals10" / "raw-img",
+            downloaded_root / "data" / "raw-img",
+        )
+
+        for candidate in candidate_dirs:
+            if candidate.exists():
+                return candidate
+
+        raise FileNotFoundError(
+            "Animals-10 downloaded but no `raw-img` directory was found under "
+            f"{downloaded_root}"
+        )
+
     if dataset_name == "flowers":
         return DEFAULT_FLOWERS_DIR
     if dataset_name == "textile":
@@ -263,6 +314,8 @@ def create_datasets(
             max_classes=max_classes,
         )
     else:
+        if root_dir is None and dataset_name == "animals10":
+            root_dir = resolve_default_root_dir(dataset_name)
         image_paths = resolve_textile_image_paths(root_dir=root_dir)
         train_paths, val_paths = split_image_paths(
             image_paths,
@@ -331,6 +384,61 @@ def create_dataloaders(
     )
 
     return train_loader, val_loader
+
+
+def create_resnet_dataloaders(
+    root_dir=None,
+    dataset_name="animals10",
+    batch_size=32,
+    image_size=224,
+    val_split=0.2,
+    seed=42,
+    num_workers=0,
+    pin_memory=None,
+):
+    if root_dir is None:
+        root_dir = resolve_default_root_dir(normalize_dataset_name(dataset_name))
+
+    transform = default_resnet_transform(image_size=image_size)
+    dataset = datasets.ImageFolder(root=str(root_dir), transform=transform)
+
+    if len(dataset) < 2:
+        raise ValueError("ResNet pipeline requires at least 2 images to build train/val splits")
+
+    val_size = max(1, int(len(dataset) * val_split))
+    train_size = len(dataset) - val_size
+
+    if train_size <= 0:
+        raise ValueError(
+            f"val_split={val_split} leaves no training samples for dataset size {len(dataset)}"
+        )
+
+    generator = torch.Generator().manual_seed(seed)
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator=generator)
+
+    if pin_memory is None:
+        pin_memory = torch.cuda.is_available()
+
+    persistent_workers = num_workers > 0
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+    )
+
+    return train_loader, val_loader, dataset.classes
 
 
 def dataset_summary(root_dir=None, dataset_name="textile", max_classes=None):
