@@ -2,3 +2,4 @@ kagglehub
 torch
 torchvision
 matplotlib
+streamlit
